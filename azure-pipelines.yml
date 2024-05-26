@@ -1,0 +1,126 @@
+trigger: none
+#- main
+
+resources:
+- repo: self
+
+#pool:
+#  vmImage: ubuntu-latest
+#  name: mypool
+
+variables:
+  imageRepository: 'samuev/fetching-btc-prices'
+  tag: '$(Build.BuildId)'
+  bkstrgrg: 'mybtcResourceGroup'
+  bkstrg: 'mystatestorageaccount'
+  bkcontainer: 'tfstate'
+  bkstrgkey: 'terraform.tfstate'
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:
+  - job: BuildEur
+    displayName: Build EUR
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: Build and push EUR image to container registry
+      inputs:
+        containerRegistry: 'docker'
+        repository: $(imageRepository)
+        command: 'buildAndPush'
+        dockerfile: '$(Build.SourcesDirectory)/app/Dockerfile.eur'
+        tags: eur-latest
+  - job: BuildUsdt
+    displayName: Build USDT
+    pool:
+      vmImage: 'ubuntu-latest'
+    dependsOn: BuildEur
+    steps:
+    - task: Docker@2
+      displayName: Build and push USDT image to container registry
+      inputs:
+        containerRegistry: 'docker'
+        repository: $(imageRepository)
+        command: 'buildAndPush'
+        dockerfile: '$(Build.SourcesDirectory)/app/Dockerfile.usdt'
+        tags: usdt-latest
+    - task: CopyFiles@2
+      inputs:
+        Contents: 'azure-aks.yaml'
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'    
+
+- stage: tfvalidate
+  jobs:
+    - job: Validate
+      displayName: Validate Terraform
+      pool:
+        vmImage: 'ubuntu-latest'       
+      continueOnError: false
+      steps:
+      - task: TerraformInstaller@1
+        displayName: Install Terraform
+        inputs:
+          terraformVersion: 'latest'
+      - task: TerraformTaskV4@4
+        displayName: Init
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/infra'
+          backendServiceArm: 'Azure subscription 1(04e83eab-549e-446b-a1b4-985bbb3b1357)'
+          backendAzureRmResourceGroupName: '$(bkstrgrg)'
+          backendAzureRmStorageAccountName: '$(bkstrg)'
+          backendAzureRmContainerName: '$(bkcontainer)'
+          backendAzureRmKey: '$(bkstrgkey)'
+#      - task: TerraformTaskV4@4
+#        displayName: Validate
+#        inputs:
+#          provider: 'azurerm'
+#          command: 'validate'
+#          workingDirectory: '$(System.DefaultWorkingDirectory)infra'
+- stage: tfdeploy
+#  condition: succeeded('tfvalidate')
+#  dependsOn: tfvalidate
+  jobs:
+    - job: Apply
+      displayName: Apply Terraform
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: TerraformInstaller@1
+          displayName: Install Terraform
+          inputs:
+            terraformVersion: 'latest'
+        - task: TerraformTaskV4@4
+          displayName: Init
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/infra'
+            backendServiceArm: 'Azure subscription 1(04e83eab-549e-446b-a1b4-985bbb3b1357)'
+            backendAzureRmResourceGroupName: '$(bkstrgrg)'
+            backendAzureRmStorageAccountName: '$(bkstrg)'
+            backendAzureRmContainerName: '$(bkcontainer)'
+            backendAzureRmKey: '$(bkstrgkey)'
+        - task: TerraformTaskV4@4
+          displayName: Plan
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/infra'
+            environmentServiceNameAzureRM: 'Azure subscription 1 (04e83eab-549e-446b-a1b4-985bbb3b1357)'
+        - task: TerraformTaskV4@4
+          displayName: Apply
+          inputs:
+            provider: 'azurerm'
+            command: 'apply'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/infra'
+            environmentServiceNameAzureRM: 'Azure subscription 1 (04e83eab-549e-446b-a1b4-985bbb3b1357)'
